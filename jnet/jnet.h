@@ -42,6 +42,7 @@ namespace jnet {
 		void Send(ExternalJClient client, const Json& j);
 		void SendAll(const Json& j);
 		void DisconnectClient(ExternalJClient client);
+		uint16_t GetPort() const;
 
 		virtual bool OnClientConnect(ExternalJClient client) { return true; }
 		virtual void OnClientDisconnect(ExternalJClient client) {}
@@ -69,6 +70,7 @@ namespace jnet {
 		std::vector<ExternalJClient> disconnections;
 		std::unordered_map<ExternalJClient, Client> clients;
 		ExternalJClient nextID = 1;
+		uint16_t port = 0;
 	};
 
 	struct LocalJClient {
@@ -202,6 +204,8 @@ namespace jnet {
 		acceptor.listen(acceptor.max_listen_connections, ec);
 		CheckError(ec);
 
+		this->port = (uint16_t)acceptor.local_endpoint().port();
+
 		// Accept connections from a separate thread
 		acceptorThrd = std::thread([this] {
 			while (!disconnectPending) {
@@ -232,8 +236,7 @@ namespace jnet {
 					try {
 						ReadSocket(client.socket, client.dataRecv);
 						WriteSocket(client.socket, client.dataSend);
-					} catch (Exception& ex) {
-						std::cout << ex.what() << std::endl;
+					} catch (Exception&) {
 						dcs.push_back(id);
 						disconnections.push_back(id);
 					}
@@ -310,6 +313,10 @@ namespace jnet {
 			clients.at(client).socket.close();
 	}
 
+	inline uint16_t JServer::GetPort() const {
+		return port;
+	}
+
 
 
 	inline LocalJClient::LocalJClient(const std::string& host, uint16_t port) :
@@ -337,9 +344,7 @@ namespace jnet {
 					ReadSocket(socket, dataRecv);
 					WriteSocket(socket, dataSend);
 				}
-			} catch (Exception& ex) {
-				std::cout << ex.what() << std::endl;
-			}
+			} catch (Exception&) {}
 
 			disconnectPending = true;
 
