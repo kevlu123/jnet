@@ -35,19 +35,34 @@ namespace jnet {
 
 	struct JServer {
 
+		// Starts server immediately on the specified port.
+		// Specify 0 to let the OS choose a free port.
+		// Throws jnet::Exception on failure.
 		JServer(uint16_t port);
+
 		virtual ~JServer();
 
-		void Update();
-		void Send(ExternalJClient client, const Json& j);
-		void SendAll(const Json& j);
-		void DisconnectClient(ExternalJClient client);
-		uint16_t GetPort() const;
+		// Receive callbacks
+		void Update() noexcept;
 
+		// Send a JSON object to the specified client. Do nothing if the client does not exist.
+		void Send(ExternalJClient client, const Json& j) noexcept;
+
+		// Send a JSON object to all clients
+		void SendAll(const Json& j) noexcept;
+
+		// Disconnect the specified client. Do nothing if the client does not exist.
+		void DisconnectClient(ExternalJClient client) noexcept;
+
+		// Get the port bound by the server
+		uint16_t GetPort() const noexcept;
+
+		// Overridable callbacks
 		virtual bool OnClientConnect(ExternalJClient client) { return true; }
 		virtual void OnClientDisconnect(ExternalJClient client) {}
 		virtual void OnReceive(ExternalJClient client, Json& j) {}
 
+		// Maximum number of connections allowed
 		std::atomic_uint32_t maxClients = 0xFFFFFFFF;
 
 	private:
@@ -75,13 +90,21 @@ namespace jnet {
 
 	struct LocalJClient {
 
+		// Connects to the host on the specified port.
+		// Throws jnet::Exception on failure.
 		LocalJClient(const std::string& host, uint16_t port);
 		virtual ~LocalJClient();
 
-		void Update();
-		void Send(const Json& j);
-		void Disconnect();
+		// Receive callbacks
+		void Update() noexcept;
 
+		// Send a JSON object to the server. Do nothing if not connected.
+		void Send(const Json& j) noexcept;
+
+		// Disconnect from server. Do nothing if not connected.
+		void Disconnect() noexcept;
+
+		// Overridable callbacks
 		virtual void OnDisconnect() {}
 		virtual void OnReceive(Json& j) {}
 
@@ -259,7 +282,16 @@ namespace jnet {
 
 	inline void JServer::Update() {
 		using namespace internal;
+
 		std::scoped_lock lock(mtx);
+
+		// Close connections if there are more than maxClients
+		if (clients.size() > maxClients) {
+			size_t excessClients = clients.size() - maxClients;
+			auto it = clients.begin();
+			for (size_t i = 0; i < excessClients; ++i, ++it)
+				it->second.socket.close();
+		}
 
 		// Disconnections
 		for (ExternalJClient id : disconnections)
