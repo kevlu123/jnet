@@ -42,6 +42,12 @@ namespace jnet {
 
 		virtual ~JServer();
 
+		// Not copyable or movable due to asio::io_context and mutex
+		JServer(const JServer&) = delete;
+		JServer(JServer&&) = delete;
+		JServer& operator=(const JServer&) = delete;
+		JServer& operator=(JServer&&) = delete;
+
 		// Receive callbacks
 		void Update() noexcept;
 
@@ -58,9 +64,9 @@ namespace jnet {
 		uint16_t GetPort() const noexcept;
 
 		// Overridable callbacks
-		virtual bool OnClientConnect(ExternalJClient client) { return true; }
-		virtual void OnClientDisconnect(ExternalJClient client) {}
-		virtual void OnReceive(ExternalJClient client, Json& j) {}
+		virtual bool OnClientConnect(ExternalJClient client) noexcept { return true; }
+		virtual void OnClientDisconnect(ExternalJClient client) noexcept {}
+		virtual void OnReceive(ExternalJClient client, Json& j) noexcept {}
 
 		// Maximum number of connections allowed
 		std::atomic_uint32_t maxClients = 0xFFFFFFFF;
@@ -78,7 +84,7 @@ namespace jnet {
 		asio::ip::tcp::acceptor acceptor;
 		std::thread acceptorThrd;
 		std::thread msgThrd;
-		std::mutex mtx;
+		std::recursive_mutex mtx;
 		std::atomic_bool disconnectPending = false;
 
 		std::vector<ExternalJClient> newConnections;
@@ -93,6 +99,13 @@ namespace jnet {
 		// Connects to the host on the specified port.
 		// Throws jnet::Exception on failure.
 		LocalJClient(const std::string& host, uint16_t port);
+
+		// Not copyable or movable due to asio::io_context and mutex
+		LocalJClient(const LocalJClient&) = delete;
+		LocalJClient(LocalJClient&&) = delete;
+		LocalJClient& operator=(const LocalJClient&) = delete;
+		LocalJClient& operator=(LocalJClient&&) = delete;
+
 		virtual ~LocalJClient();
 
 		// Receive callbacks
@@ -105,15 +118,15 @@ namespace jnet {
 		void Disconnect() noexcept;
 
 		// Overridable callbacks
-		virtual void OnDisconnect() {}
-		virtual void OnReceive(Json& j) {}
+		virtual void OnDisconnect() noexcept {}
+		virtual void OnReceive(Json& j) noexcept {}
 
 	private:
 
 		asio::io_context context;
 		asio::ip::tcp::socket socket;
 		std::thread thrd;
-		std::mutex mtx;
+		std::recursive_mutex mtx;
 		std::atomic_bool disconnectPending = false;
 
 		bool connected = false;
@@ -280,7 +293,7 @@ namespace jnet {
 			msgThrd.join();
 	}
 
-	inline void JServer::Update() {
+	inline void JServer::Update() noexcept {
 		using namespace internal;
 
 		std::scoped_lock lock(mtx);
@@ -317,7 +330,7 @@ namespace jnet {
 		}
 	}
 
-	inline void JServer::Send(ExternalJClient client, const Json& j) {
+	inline void JServer::Send(ExternalJClient client, const Json& j) noexcept {
 		std::scoped_lock lock(mtx);
 		auto c = clients.find(client);
 		if (c != clients.end()) {
@@ -327,7 +340,7 @@ namespace jnet {
 		}
 	}
 
-	inline void JServer::SendAll(const Json& j) {
+	inline void JServer::SendAll(const Json& j) noexcept {
 		std::scoped_lock lock(mtx);
 		for (auto& [id, _] : clients) {
 			auto c = clients.find(id);
@@ -339,13 +352,13 @@ namespace jnet {
 		}
 	}
 
-	inline void JServer::DisconnectClient(ExternalJClient client) {
+	inline void JServer::DisconnectClient(ExternalJClient client) noexcept {
 		std::scoped_lock lock(mtx);
 		if (clients.contains(client))
 			clients.at(client).socket.close();
 	}
 
-	inline uint16_t JServer::GetPort() const {
+	inline uint16_t JServer::GetPort() const noexcept {
 		return port;
 	}
 
@@ -388,7 +401,7 @@ namespace jnet {
 		Update(); // Disconnect here
 	}
 
-	inline void LocalJClient::Update() {
+	inline void LocalJClient::Update() noexcept {
 		using namespace internal;
 
 		if (!connected)
@@ -413,12 +426,12 @@ namespace jnet {
 		);
 	}
 
-	inline void LocalJClient::Disconnect() {
+	inline void LocalJClient::Disconnect() noexcept {
 		if (connected)
 			disconnectPending = true;
 	}
 
-	inline void LocalJClient::Send(const Json& j) {
+	inline void LocalJClient::Send(const Json& j) noexcept {
 		if (connected) {
 			std::scoped_lock lock(mtx);
 			Bytes b = internal::JsonToBytes(j);
