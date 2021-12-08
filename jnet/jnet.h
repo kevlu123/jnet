@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#include <chrono>
 
 #include "jnet/json.h"
 
@@ -229,6 +230,7 @@ namespace jnet {
 		acceptor(context)
 	{
 		using namespace internal;
+		using namespace std::chrono_literals;
 
 		// Start acceptor
 		asio::error_code ec{};
@@ -245,6 +247,8 @@ namespace jnet {
 		// Accept connections from a separate thread
 		acceptorThrd = std::thread([this] {
 			while (!disconnectPending) {
+				std::this_thread::sleep_for(1ms);
+
 				asio::error_code ec{};
 				asio::ip::tcp::socket socket = acceptor.accept(ec); // Ignore error
 
@@ -264,6 +268,8 @@ namespace jnet {
 			asio::error_code ec{};
 
 			while (!disconnectPending) {
+				std::this_thread::sleep_for(1ms);
+
 				std::scoped_lock lock(mtx);
 
 				std::vector<ExternalJClient> dcs;
@@ -368,6 +374,8 @@ namespace jnet {
 		socket(context)
 	{
 		using namespace internal;
+		using namespace std::chrono_literals;
+
 		asio::error_code ec{};
 
 		// Get endpoint from hostname
@@ -385,6 +393,8 @@ namespace jnet {
 
 			try {
 				while (!disconnectPending) {
+					std::this_thread::sleep_for(1ms);
+
 					std::scoped_lock lock(mtx);
 					ReadSocket(socket, dataRecv);
 					WriteSocket(socket, dataSend);
@@ -406,6 +416,8 @@ namespace jnet {
 
 		if (!connected)
 			return;
+
+		std::scoped_lock lock(mtx);
 
 		// Check if disconnected
 		if (disconnectPending) {
