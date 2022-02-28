@@ -8,7 +8,8 @@
 #include <stdexcept>
 #include <chrono>
 
-#include "jnet/json.h"
+#include "json.h"
+#include "Stopwatch.h"
 
 #ifdef _WIN32
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
@@ -24,6 +25,36 @@
 
 
 namespace jnet {
+
+	namespace internal {
+		struct SpeedCounter {
+			size_t readSpeed = 0;
+			size_t writeSpeed = 0;
+
+			void Update() {
+				if (stopwatch.Time() > 1.0f) {
+					stopwatch.Restart();
+					readSpeed = readSpeedCounter;
+					writeSpeed = writeSpeedCounter;
+					readSpeedCounter = 0;
+					writeSpeedCounter = 0;
+				}
+			}
+
+			void Received(size_t n) {
+				readSpeedCounter += n;
+			}
+
+			void Sent(size_t n) {
+				writeSpeedCounter += n;
+			}
+
+		private:
+			Stopwatch<> stopwatch;
+			std::atomic_size_t readSpeedCounter = 0;
+			std::atomic_size_t writeSpeedCounter = 0;
+		};
+	}
 
 	using Json = nlohmann::json;
 	using ExternalJClient = uint32_t;
@@ -72,6 +103,10 @@ namespace jnet {
 		// Maximum number of connections allowed
 		std::atomic_uint32_t maxClients = 0xFFFFFFFF;
 
+		// Get a hint of upload/download speed used by this instance
+		size_t GetReadSpeed() const { return speedCounter.readSpeed; }
+		size_t GetWriteSpeed() const { return speedCounter.writeSpeed; }
+
 	private:
 
 		struct Client {
@@ -93,6 +128,7 @@ namespace jnet {
 		std::unordered_map<ExternalJClient, Client> clients;
 		ExternalJClient nextID = 1;
 		uint16_t port = 0;
+		internal::SpeedCounter speedCounter;
 	};
 
 	struct LocalJClient {
@@ -110,7 +146,7 @@ namespace jnet {
 		virtual ~LocalJClient();
 
 		// Receive callbacks
-		void Update() noexcept;
+		void Update();
 
 		// Send a JSON object to the server. Do nothing if not connected.
 		void Send(const Json& j) noexcept;
@@ -119,8 +155,12 @@ namespace jnet {
 		void Disconnect() noexcept;
 
 		// Overridable callbacks
-		virtual void OnDisconnect() noexcept {}
-		virtual void OnReceive(Json& j) noexcept {}
+		virtual void OnDisconnect() {}
+		virtual void OnReceive(Json& j) {}
+
+		// Get a hint of upload/download speed used by this instance
+		size_t GetReadSpeed() const { return speedCounter.readSpeed; }
+		size_t GetWriteSpeed() const { return speedCounter.writeSpeed; }
 
 	private:
 
@@ -133,6 +173,7 @@ namespace jnet {
 		bool connected = false;
 		Bytes dataRecv;
 		Bytes dataSend;
+		internal::SpeedCounter speedCounter;
 	};
 
 
@@ -218,10 +259,12 @@ namespace jnet {
 		}
 
 		inline void WriteSocket(asio::ip::tcp::socket& socket, Bytes& buf) {
-			asio::error_code ec{};
-			size_t bytesSent = socket.write_some(asio::buffer(buf.data(), buf.size()), ec);
-			buf.erase(buf.begin(), buf.begin() + bytesSent);
-			CheckError(ec);
+			if (buf.size()) {
+				asio::error_code ec{};
+				size_t bytesSent = socket.write_some(asio::buffer(buf.data(), buf.size()), ec);
+				buf.erase(buf.begin(), buf.begin() + bytesSent);
+				CheckError(ec);
+			}
 		}
 	}
 
@@ -258,6 +301,9 @@ namespace jnet {
 						clients.insert({ nextID, Client(std::move(socket)) });
 						newConnections.push_back(nextID);
 						nextID++;
+					} else {
+						socket.shutdown(asio::socket_base::shutdown_both, ec);
+						socket.close(ec);
 					}
 				}
 			}
@@ -276,8 +322,12 @@ namespace jnet {
 
 				for (auto& [id, client] : clients) {
 					try {
+						size_t readBufSize = client.dataRecv.size();
+						size_t writeBufSize = client.dataSend.size();
 						ReadSocket(client.socket, client.dataRecv);
 						WriteSocket(client.socket, client.dataSend);
+						speedCounter.Received(client.dataRecv.size() - readBufSize);
+						speedCounter.Sent(writeBufSize - client.dataSend.size());
 					} catch (Exception&) {
 						dcs.push_back(id);
 						disconnections.push_back(id);
@@ -293,6 +343,14 @@ namespace jnet {
 
 	inline JServer::~JServer() {
 		disconnectPending = true;
+
+		// Connect a dummy client to stop a blocking call so that the acceptor thread can return
+		try {
+		    LocalJClient dummy("127.0.0.1", port);
+		} catch (jnet::Exception&){}
+		acceptor.cancel();
+		acceptor.close();
+
 		if (acceptorThrd.joinable())
 			acceptorThrd.join();
 		if (msgThrd.joinable())
@@ -328,12 +386,16 @@ namespace jnet {
 		newConnections.clear();
 
 		// Process messages
-		for (auto& [id, client] : clients) {
+		for (auto& p : clients) {
+			auto& id = p.first;
+			auto& client = p.second;
 			ProcessDataReceived(
 				client.dataRecv,
 				[this, id](Json& msg) { OnReceive(id, msg); }
 			);
 		}
+
+		speedCounter.Update();
 	}
 
 	inline void JServer::Send(ExternalJClient client, const Json& j) noexcept {
@@ -380,7 +442,8 @@ namespace jnet {
 
 		// Get endpoint from hostname
 		asio::ip::tcp::resolver resolver(context);
-		auto results = resolver.resolve(host, std::to_string(port));
+		auto results = resolver.resolve(host, std::to_string(port), ec);
+		CheckError(ec);
 
 		// Connect to endpoint
 		asio::connect(socket, results.begin(), results.end(), ec);
@@ -396,8 +459,12 @@ namespace jnet {
 					std::this_thread::sleep_for(1ms);
 
 					std::scoped_lock lock(mtx);
+					size_t readBufSize = dataRecv.size();
+					size_t writeBufSize = dataSend.size();
 					ReadSocket(socket, dataRecv);
 					WriteSocket(socket, dataSend);
+					speedCounter.Received(dataRecv.size() - readBufSize);
+					speedCounter.Sent(writeBufSize - dataSend.size());
 				}
 			} catch (Exception&) {}
 
@@ -411,18 +478,17 @@ namespace jnet {
 		Update(); // Disconnect here
 	}
 
-	inline void LocalJClient::Update() noexcept {
+	inline void LocalJClient::Update() {
 		using namespace internal;
 
 		if (!connected)
 			return;
 
-		std::scoped_lock lock(mtx);
-
 		// Check if disconnected
 		if (disconnectPending) {
 			if (thrd.joinable())
 				thrd.join();
+			std::scoped_lock lock(mtx);
 			disconnectPending = false;
 			asio::error_code ec{};
 			socket.close(ec); // Ignore error
@@ -432,10 +498,13 @@ namespace jnet {
 		}
 
 		// Process messages
+		std::scoped_lock lock(mtx);
 		ProcessDataReceived(
 			dataRecv,
 			[this](Json& msg) { OnReceive(msg); }
 		);
+
+		speedCounter.Update();
 	}
 
 	inline void LocalJClient::Disconnect() noexcept {
