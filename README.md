@@ -1,6 +1,6 @@
-# JNet
+# jnet
 
-JNet is a simple header only networking library built over asio TCP sockets. To simplify serialization and deserialization, data is sent and received as JSON objects. This library uses an internal protocol and is only intended to connect to other applications using this library.<br>
+jnet is a simple header only networking library built over asio TCP sockets. To simplify serialization and deserialization, data is sent and received as JSON objects. This library uses an internal protocol and is only intended to connect to other applications using this library.<br>
 Asio https://think-async.com/Asio/Download.html<br>
 JSON https://github.com/nlohmann/json.<br>
 C++20 is required. 
