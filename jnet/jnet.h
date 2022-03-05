@@ -455,7 +455,7 @@ namespace jnet {
 		thrd = std::thread([this] {
 
 			try {
-				while (!disconnectPending) {
+				while (true) {
 					std::this_thread::sleep_for(1ms);
 
 					std::scoped_lock lock(mtx);
@@ -486,12 +486,14 @@ namespace jnet {
 
 		// Check if disconnected
 		if (disconnectPending) {
-			if (thrd.joinable())
-				thrd.join();
-			std::scoped_lock lock(mtx);
+			{
+				std::scoped_lock lock(mtx);
+				asio::error_code ec{};
+				socket.shutdown(asio::ip::tcp::socket::shutdown_both, ec); // Ignore error
+				socket.close(ec); // Ignore error
+			}
+			thrd.join();
 			disconnectPending = false;
-			asio::error_code ec{};
-			socket.close(ec); // Ignore error
 			connected = false;
 			OnDisconnect();
 			return;
